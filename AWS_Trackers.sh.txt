@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# Set threshold for CPU utilization
+THRESHOLD=10
+SNS_TOPIC_ARN="arn:aws:sns:region:account-id:topic-name"
+
+# Function to get CPU utilization for an instance
+get_cpu_utilization() {
+    INSTANCE_ID=$1
+    CPU_USAGE=$(aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization \
+        --dimensions Name=InstanceId,Value=$INSTANCE_ID --start-time $(date -u -d '10 minutes ago' +"%Y-%m-%dT%H:%M:%SZ") \
+        --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") --period 300 --statistics Average --query "Datapoints[0].Average" --output text)
+
+    echo $CPU_USAGE
+}
+
+# Function to send notification via SNS
+send_notification() {
+    INSTANCE_ID=$1
+    CPU_USAGE=$2
+    MESSAGE="Instance $INSTANCE_ID has low CPU utilization: $CPU_USAGE%. Consider optimization."
+    aws sns publish --topic-arn $SNS_TOPIC_ARN --subject "AWS Resource Optimization Alert" --message "$MESSAGE"
+}
+
+# Get list of running instances
+INSTANCE_IDS=$(aws ec2 describe-instances --query "Reservations[*].Instances[*].InstanceId" --filters Name=instance-state-name,Values=running --output text)
+
+# Check each instance's CPU utilization
+for INSTANCE_ID in $INSTANCE_IDS; do
+    CPU_USAGE=$(get_cpu_utilization $INSTANCE_ID)
+    CPU_USAGE=${CPU_USAGE:-0}  # Default to 0 if no data is returned
+    echo "Instance ID: $INSTANCE_ID, CPU Usage: $CPU_USAGE%"
+
+    # If CPU usage is below threshold, send notification
+    if (( $(echo "$CPU_USAGE < $THRESHOLD" | bc -l) )); then
+        send_notification $INSTANCE_ID $CPU_USAGE
+    fi
+done
